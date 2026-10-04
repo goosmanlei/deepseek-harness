@@ -24,6 +24,8 @@ export {
   PROFILE_COMPATIBILITY_FILENAME, readProfileCompatibility, readProfileVersionExemptions,
   setProfileVersionExemption, type ProfileCompatibility,
 } from './profile-compatibility.ts'
+import { profileDebug } from './profile-debug.ts'
+export { profileDebug } from './profile-debug.ts'
 import { prepareProfilePatches } from './compatibility-preflight.ts'
 export { prepareProfileEntries, prepareProfilePatches } from './compatibility-preflight.ts'
 export { readPluginMeta } from './package-meta.ts'
@@ -313,11 +315,15 @@ export async function reconcileProfilePatches(
  * @returns the parsed patches, or `undefined` when the file does not exist.
  */
 export function loadOptionalPatches(binName: string, file: string): PatchOptions[] | undefined {
+  profileDebug('loadOptionalPatches', '读取可选用户 patch 文件', { file })
   let content: string
   try {
     content = readFileSync(file, 'utf8')
   } catch (error) {
-    if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') return undefined
+    if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') {
+      profileDebug('loadOptionalPatches', '文件不存在，不添加这一层', { file })
+      return undefined
+    }
     throw new Error(`${binName}: failed to read patches ${file}: ${String(error)}`)
   }
   return parsePatchList(binName, file, content, 'patches')
@@ -333,6 +339,7 @@ export function loadOptionalPatches(binName: string, file: string): PatchOptions
  * @returns the parsed patch list.
  */
 export function loadOverlayPatches(binName: string, file: string): PatchOptions[] {
+  profileDebug('loadOverlayPatches', '读取必需的 bundle 或命令行 patch 文件', { file })
   let content: string
   try {
     content = readFileSync(file, 'utf8')
@@ -347,7 +354,9 @@ function anchorInsertedPluginNames(patches: PatchOptions[], file: string): Patch
   const base = dirname(resolve(file))
   const visit = (entry: EntryOptions): void => {
     if (typeof entry.name === 'string' && (isAbsolute(entry.name) || entry.name.startsWith('./') || entry.name.startsWith('../'))) {
+      const originalName = entry.name
       entry.name = pathToFileURL(resolve(base, entry.name)).href
+      profileDebug('anchorInsertedPluginNames', '插入插件的文件路径转换为 URL', { file, base, originalName, resolvedName: entry.name })
     }
     if (entry.group && Array.isArray(entry.config)) entry.config.forEach(visit)
   }
@@ -384,7 +393,10 @@ function parsePatchList(
       throw new Error(`${binName}: ${label} entry ${index + 1} in ${file} must be a mapping (a loader patch entry)`)
     }
   })
-  return anchorInsertedPluginNames(parsed as PatchOptions[], file)
+  profileDebug('parsePatchList', 'YAML 已解析，接着锚定插入插件的相对路径', { file, label, parsed })
+  const patches = anchorInsertedPluginNames(parsed as PatchOptions[], file)
+  profileDebug('parsePatchList', '返回路径已锚定的 patch 列表；!!js 保留到插件激活时求值', { file, patches })
+  return patches
 }
 
 /** One overlay patch list with the source label printed in dump comments. */
@@ -542,6 +554,7 @@ export async function mountRootInclude(
   bareModuleBaseUrl?: string,
   binName = 'dsh',
 ): Promise<Entry | undefined> {
+  profileDebug('mountRootInclude', '准备根 Include 与内置 group；Include 将读取根文件并应用 patch', { absoluteConfigPath, bareModuleBaseUrl })
   ctx.loader.builtins.include = bareModuleBaseUrl === undefined
     ? Include
     : class HostResolvedRootInclude extends Include {
@@ -576,7 +589,9 @@ export async function mountRootInclude(
     name: 'cordis:include',
     config: includeConfig,
   }
+  profileDebug('mountRootInclude', '交给 Loader 创建根 Include', rootInclude)
   const includeId = await ctx.loader.create(rootInclude)
+  profileDebug('mountRootInclude', '根 Include 创建操作返回；全树仍需等待 Loader.await', { includeId, hasLoader: ctx.get('loader') !== undefined })
   const loader = ctx.get('loader')
   if (loader === undefined) return undefined
   const entry = loader.resolve(includeId)
@@ -927,9 +942,14 @@ export async function auditStartupEntries(
   binName: string,
   warn: (line: string) => void = line => void process.stderr.write(line),
 ): Promise<void> {
+  profileDebug('auditStartupEntries', '检查已收敛插件树中的未激活条目', { binName })
   const failures = await inactiveEntries(ctx)
   const required = new Set(failures.filter(({ entry }) => entry === bootstrapIncludes.get(ctx)
     || requiredStartupEntryIds.has(entry.options.id)).map(({ entry }) => entry))
+  profileDebug('auditStartupEntries', '启动检查结果：必需条目失败则终止，其他失败只警告', {
+    requiredFailedIds: [...required].map(entry => entry.id),
+    failures: failures.map(({ entry, outcome }) => ({ id: entry.id, name: entry.options.name, outcome })),
+  })
   if (required.size > 0) {
     throw new StartupError(startupDiagnostic(binName, failures, required), failures.map(({ entry, outcome }) => ({
       id: entry.options.id, module: entry.options.name, required: required.has(entry), fiberState: entry.fiber?.state, outcome,
@@ -976,6 +996,7 @@ export async function boot(
   prepare?: (ctx: Context) => Promise<void> | void,
   bareModuleBaseUrl?: string,
 ): Promise<Context> {
+  profileDebug('boot', '创建根 Context', { binName, absoluteConfigPath, hasPrepare: prepare !== undefined })
   const ctx = new Context()
   const startupLogs: StartupLogRecord[] = []
   // The collector must outlive root disposal to retain asynchronous cleanup errors.
@@ -998,8 +1019,11 @@ export async function boot(
     ctx.on('internal/update', (_config, _noSave, next: () => unknown) => {
       void Promise.resolve(next()).catch((error: unknown) => { ctx.logger.error(error) })
     }, { global: true, prepend: true })
+    profileDebug('boot', '安装 Loader 服务', { baseUrl: ctx.baseUrl })
     await ctx.plugin(Loader)
+    profileDebug('boot', 'Loader 已安装，调用启动器 prepare 回调注入共享服务')
     await prepare?.(ctx)
+    profileDebug('boot', 'prepare 回调完成，开始挂载配置树')
     stage = 'plugin tree failed to load'
     await mountRootInclude(ctx, absoluteConfigPath, patches, bareModuleBaseUrl, binName)
     // A surface can finish and dispose the whole tree while startup is still
@@ -1007,11 +1031,22 @@ export async function boot(
     // it, and the activation audit describes a live tree — reading `ctx.loader`
     // past this point would throw a TypeError over an app that exited exactly
     // as asked. Re-check after settlement before auditing the tree.
+    profileDebug('boot', '等待所有插件的启动工作收敛；条目可能并发加载')
     await ctx.get('loader')?.await()
-    if (ctx.get('loader') === undefined) return ctx
+    const loader = ctx.get('loader')
+    if (loader === undefined) {
+      profileDebug('boot', '等待期间应用已释放插件树，不再进行启动检查', { fiberState: ctx.fiber.state })
+      return ctx
+    }
+    profileDebug('boot', '实际 Loader 插件树；配置条目与 fiber 状态分开显示', {
+      fiberStates: { PENDING: 0, LOADING: 1, ACTIVE: 2, FAILED: 3, DISPOSED: 4, UNLOADING: 5 },
+      entries: [...loader.entries()].map(entry => ({ id: entry.id, options: entry.options, fiberState: entry.fiber?.state })),
+    })
     await auditStartupEntries(ctx, binName)
+    profileDebug('boot', '启动检查通过，返回 Context', { fiberState: ctx.fiber.state })
     return ctx
   } catch (cause) {
+    profileDebug('boot', '启动失败，释放部分加载的 Context', { stage, cause })
     // Root-fiber disposal contains cleanup failures per observer (Cordis
     // fiber.ts hardening) and a repeated call returns the settled single-shot
     // result, so this await cannot reject and replace `cause`.

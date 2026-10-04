@@ -29,7 +29,7 @@
 | `api-session/error` | `emit` | [`packages/api/session-controller/src/types.ts:618`](../packages/api/session-controller/src/types.ts) | `session-controller` (`emit`) | `remotes` |
 | `api-session/removed` | `emit` | [`packages/api/session-controller/src/types.ts:597`](../packages/api/session-controller/src/types.ts) | `session-controller` (`emit`) | `remotes` |
 | `api-session/status` | `emit` | [`packages/api/session-controller/src/types.ts:604`](../packages/api/session-controller/src/types.ts) | `session-controller` (`emit`) | `remotes` |
-| `app-boot/config-reload` | `emit` | [`packages/boot/app-boot/src/index.ts:52`](../packages/boot/app-boot/src/index.ts) | [`app-boot`](../packages/boot/app-boot) (`emit`) | [`settings`](../packages/settings/settings) |
+| `app-boot/config-reload` | `emit` | [`packages/boot/app-boot/src/index.ts:54`](../packages/boot/app-boot/src/index.ts) | [`app-boot`](../packages/boot/app-boot) (`emit`) | [`settings`](../packages/settings/settings) |
 | `approval/request` | `waterfall` | [`packages/interaction/user-approval/src/types.ts:87`](../packages/interaction/user-approval/src/types.ts) | [`user-approval`](../packages/interaction/user-approval) (`waterfall`) | [`acp`](../packages/acp/acp), `remotes` |
 | `authorization/settled` | `emit` | [`packages/credentials/authorization/src/index.ts:57`](../packages/credentials/authorization/src/index.ts) | [`authorization`](../packages/credentials/authorization) (`events.dispatch`) | [`authorization`](../packages/credentials/authorization) |
 | `commands/change` | `emit` | [`packages/interaction/commands/src/types.ts:89`](../packages/interaction/commands/src/types.ts) | [`commands`](../packages/interaction/commands) (`events.dispatch`) | `remotes` |

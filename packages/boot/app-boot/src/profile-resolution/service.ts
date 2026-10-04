@@ -13,6 +13,7 @@ import {
 } from './resolver.ts'
 import type { RuntimeResolution } from '../profile.ts'
 import { readPluginMeta } from '../package-meta.ts'
+import { profileDebug } from '../profile-debug.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -64,10 +65,15 @@ export class PluginPackages extends Service {
 
   constructor(ctx: Context, config: PluginPackagesConfig = {}) {
     super(ctx, 'pluginPackages')
-    if (config.resolution === undefined) return
+    if (config.resolution === undefined) {
+      profileDebug('PluginPackages.constructor', '没有解析表，仅使用 Node 原生包查找')
+      return
+    }
+    profileDebug('PluginPackages.constructor', '安装进程级包解析拦截并注册 Worker 解析信息', config.resolution)
     const interception = installRuntimeInterception(config.resolution)
     this.disposeWorkerResolution = registerWorkerResolution(config.resolution)
     this.interception = interception
+    profileDebug('PluginPackages.constructor', '包解析服务安装完成')
     ctx.effect(() => () => {
       this.disposeWorkerResolution?.()
       interception.dispose()
@@ -99,6 +105,7 @@ export class PluginPackages extends Service {
     const dir = this.interception === undefined
       ? packageDirFromParent(name, parentURL)
       : this.interception.packageDir(name, parentURL)
+    profileDebug('PluginPackages.packageOf', '按插件标识符定位所属包（用于兼容性与元信息）', { specifier, parentURL, name, dir })
     if (dir === undefined) return undefined
     const key = JSON.stringify({ dir, name })
     if (!this.packages.has(key)) this.packages.set(key, readPackage(dir, name))

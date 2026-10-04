@@ -13,6 +13,7 @@ import type {} from './profile-resolution/service.ts'
 import type {} from './profile-context.ts'
 import { evaluatePluginCompatibility, pluginCompatibilityWarning } from './plugin-compatibility.ts'
 import { readProfileCompatibility } from './profile-compatibility.ts'
+import { profileDebug } from './profile-debug.ts'
 
 function readManifest(filename: string): object {
   return JSON.parse(readFileSync(filename, 'utf8')) as object
@@ -112,6 +113,7 @@ function preflight(
     }
   }
   const deny = (row: EntryOptions, reason: string): void => {
+    profileDebug('preflight', '版本兼容性拒绝条目：仅修改启动器副本', { row, reason })
     row.disabled = true
     if (row.group) row.group = false
     report(row, reason)
@@ -180,8 +182,14 @@ function preflight(
 export function prepareProfilePatches(
   ctx: Context, patches: PatchOptions[], parentURL: string, binName = 'dsh',
 ): PatchOptions[] {
-  if (ctx.get('profileContext') === undefined) return patches
+  if (ctx.get('profileContext') === undefined) {
+    profileDebug('prepareProfilePatches', '非 Profile 启动，保留传入 patch', { parentURL })
+    return patches
+  }
+  profileDebug('prepareProfilePatches', '在空根上执行 patch 合成，随后检查插件兼容性', { parentURL, patches })
   const entries = applyEntryPatches([], patches, patchWarning(ctx))
+  profileDebug('prepareProfilePatches', 'patch 合成结果；尚未检查兼容性或导入插件', entries)
   const rows = prepareProfileEntries(ctx, entries, parentURL, binName)
+  profileDebug('prepareProfilePatches', '兼容性检查后的实际待挂载条目', rows)
   return rows.length === 0 ? [] : [{ insert: rows }]
 }

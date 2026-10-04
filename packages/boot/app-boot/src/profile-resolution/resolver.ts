@@ -8,6 +8,7 @@ import { getEnvironmentData, setEnvironmentData } from 'node:worker_threads'
 import type { ModuleLoaderV1, ModuleLoaderV2, ResolveResult } from '@deepseek-ai/cordis-plugin-loader'
 import { imports as resolvePackageImports, type Package as ResolvePackageManifest } from 'resolve.exports'
 import type { RuntimeResolutionEntry, RuntimeResolution } from '../profile.ts'
+import { profileDebug } from '../profile-debug.ts'
 
 const WORKER_RESOLUTION_KEY = '@deepseek-ai/dsh-app-boot/profile-resolution'
 const EMPTY_ATTRIBUTES: ImportAttributes = Object.freeze({})
@@ -709,6 +710,7 @@ function throwWithoutCjsAnchor(error: unknown, anchor: string): never {
 export function installRuntimeInterception(
   resolution: RuntimeResolution,
 ): RuntimeInterception {
+  profileDebug('installRuntimeInterception', '读取 Node 内部 ESM/CJS 解析器，构造 Profile 路由器', { profilesDir: resolution.profilesDir, profileDir: resolution.profileDir })
   const { esm, esmDefaultResolve, esmConditions, cjs, cjsConditions, modern } = internalModules()
   const router = new ResolutionRouter(resolution, directory => cjs._nodeModulePaths(directory))
   let delegatedEsm: { parent: string | undefined; request: string } | undefined
@@ -928,6 +930,7 @@ export function installRuntimeInterception(
 export function registerWorkerResolution(
   resolution: RuntimeResolution,
 ): () => void {
+  profileDebug('registerWorkerResolution', '将包解析表写入线程环境，供随后创建的 Worker 继承', { key: WORKER_RESOLUTION_KEY, profileDir: resolution.profileDir })
   const previous = getEnvironmentData(WORKER_RESOLUTION_KEY)
   setEnvironmentData(WORKER_RESOLUTION_KEY, { resolution })
   return () => { setEnvironmentData(WORKER_RESOLUTION_KEY, previous) }

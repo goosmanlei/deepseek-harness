@@ -32,6 +32,7 @@ import { evaluatePluginCompatibility, pluginCompatibilityWarning } from './plugi
 import { readProfileVersionExemptions } from './profile-compatibility.ts'
 import { loadOverlayPatches } from './index.ts'
 import { realModuleDirectory } from './profile-resolution/legacy-links.ts'
+import { profileDebug } from './profile-debug.ts'
 
 /** Directory under the Harness home holding every profile. */
 export const PROFILES_DIR = 'profiles'
@@ -111,7 +112,7 @@ export interface SkippedBundle {
 }
 
 /**
- * Print each skipped bundle once; loading never prints, so launchers call this once per start.
+ * Print each skipped-bundle warning once per start, separately from source-reading diagnostics.
  * @param binName - the diagnostic prefix.
  * @param profile - the loaded profile.
  */
@@ -172,7 +173,9 @@ export function resolveProfileDir(name: string, home: string = resolveDshHome())
     || name === 'node_modules') {
     throw new Error(`dsh: invalid profile name ${JSON.stringify(name)}`)
   }
-  return join(home, PROFILES_DIR, name)
+  const dir = join(home, PROFILES_DIR, name)
+  profileDebug('resolveProfileDir', '由 home 与名称确定 Profile 目录', { name, home, dir })
+  return dir
 }
 
 /** The shipped profile templates auto-initialized on first use, by name. */
@@ -245,6 +248,7 @@ export function initProfile(
   dir: string,
   bundles: readonly string[],
 ): void {
+  profileDebug('initProfile', '初始化 Profile 文件；已有文件保留', { dir, bundles })
   mkdirSync(dir, { recursive: true })
   const manifestPath = join(dir, 'package.json')
   if (!existsSync(manifestPath)) {
@@ -255,11 +259,13 @@ export function initProfile(
       dsh: { profile: { bundles: [...bundles] } },
     }
     writeFileSync(manifestPath, JSON.stringify(manifest, undefined, 2) + '\n')
+    profileDebug('initProfile', '已创建 package.json', { manifestPath, manifest })
   }
   const patchPath = join(dir, PROFILE_PATCH_FILENAME)
   if (!existsSync(patchPath)) writeFileSync(patchPath, PROFILE_PATCH_TEMPLATE)
   const workspacePath = join(dir, 'pnpm-workspace.yaml')
   if (!existsSync(workspacePath)) writeFileSync(workspacePath, PROFILE_PNPM_WORKSPACE)
+  profileDebug('initProfile', '初始化完成', { manifestPath, patchPath, workspacePath })
 }
 
 /** Directory where the link backend of the dsh 0.1.5 releases projected bundle-carried packages into a profile. */
@@ -370,6 +376,7 @@ function collectInstallationScopePackages(
 } {
   // Real declaring paths keep workspace symlinks under node_modules from disabling tsx path mappings.
   const canonicalAnchor = join(realModuleDirectory(dirname(installAnchor)), basename(installAnchor))
+  profileDebug('collectInstallationScopePackages', '从安装入口广度优先遍历依赖与 peer；同名包首次解析优先', { installAnchor, canonicalAnchor, skippedBundles })
   const appManifest = readPackageManifest(canonicalAnchor)
   const links = new Map<string, string>()
   const declarers = new Map<string, string>()
@@ -410,6 +417,7 @@ function collectInstallationScopePackages(
       queue.push({ anchor: manifestPath, manifest })
     }
   }
+  profileDebug('collectInstallationScopePackages', '安装级依赖遍历完成', { packageDirs: links, declarers, versions })
   return { packageNames: new Set(links.keys()), packageDirs: links, declarers, versions }
 }
 
@@ -432,6 +440,7 @@ export async function createRuntimeResolution(
   options: RuntimeResolutionOptions,
 ): Promise<RuntimeResolution> {
   const { installAnchor, profile, home = resolveDshHome() } = options
+  profileDebug('createRuntimeResolution', '开始构建包解析表', { installAnchor, profileDir: profile?.dir, home })
   const profilesDir = join(home, PROFILES_DIR)
   const manifest = readOptionalProfileManifest(profile)
   const { packageNames, packageDirs, declarers, versions } = collectInstallationScopePackages(
@@ -444,6 +453,9 @@ export async function createRuntimeResolution(
     ? new Map<string, string>()
     : collectProfileScopePackages(profile, packageNames, profileDeclarers, profileVersions)
   const linkedRoots = profile === undefined ? [] : linkedProfileRoots(profile, profilesDir)
+  profileDebug('createRuntimeResolution', '解析表构建完成：Profile 本地依赖优先于回退映射，安装级映射优先于 bundle 补充映射', {
+    profilesDir, profileDir: profile?.dir, localPackageNames, linkedRoots, profilePackages,
+  })
   // The Promise return type is the pre-stable API; construction has no asynchronous step.
   return await Promise.resolve(Object.freeze({
     profilesDir,
@@ -487,6 +499,7 @@ function dependencyClosure(
   declarers?: Map<string, string>,
   versions?: Map<string, string | undefined>,
 ): Map<string, string> {
+  profileDebug('dependencyClosure', '遍历 bundle 的依赖闭包；跳过安装级已有包', { anchors, reserved })
   const links = new Map<string, string>()
   const visited = new Set(reserved)
   for (const anchor of anchors) {
@@ -531,8 +544,10 @@ function collectProfileScopePackages(
   const bundleAnchors = profile.layers
     .filter(layer => !installationPackageNames.has(layer.packageName))
     .map(layer => join(layer.packageDir, 'package.json'))
+  profileDebug('collectProfileScopePackages', '选出安装级未提供的 bundle 作为依赖遍历入口', { bundleAnchors })
   const bundleLinks = dependencyClosure(bundleAnchors, installationPackageNames, declarers, versions)
   for (const layer of profile.layers) bundleLinks.delete(layer.packageName)
+  profileDebug('collectProfileScopePackages', '移除 bundle 本身后得到补充插件映射', bundleLinks)
   return bundleLinks
 }
 
@@ -544,6 +559,7 @@ function collectProfileScopePackages(
  */
 export function readProfileManifest(binName: string, dir: string): ProfileManifest {
   const path = join(dir, 'package.json')
+  profileDebug('readProfileManifest', '读取并校验 package.json', { path })
   let raw: string
   try {
     raw = readFileSync(path, 'utf8')
@@ -555,6 +571,7 @@ export function readProfileManifest(binName: string, dir: string): ProfileManife
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error(`${binName}: profile manifest ${path} must hold a JSON object`)
   }
+  profileDebug('readProfileManifest', 'manifest 读取完成', { path, manifest: parsed })
   return parsed
 }
 
@@ -593,6 +610,7 @@ function normalizeShippedProfile(name: string, dir: string, manifest: ProfileMan
       },
     },
   }
+  profileDebug('normalizeShippedProfile', '将已退役的内置 bundle 列表更新为当前模板', { name, dir, before: bundles, after: template.bundles })
   writeProfileManifest(dir, normalized)
   return normalized
 }
@@ -630,8 +648,10 @@ function packageDirFromAnchor(anchor: string, packageName: string): string | und
 export function resolveBundleDir(
   binName: string, packageName: string, installAnchor: string, profileDir: string,
 ): string {
+  profileDebug('resolveBundleDir', '查找 bundle：安装入口优先，Profile 入口兜底', { packageName, installAnchor, profileDir })
   for (const anchor of [installAnchor, join(profileDir, 'package.json')]) {
     const dir = packageDirFromAnchor(anchor, packageName)
+    profileDebug('resolveBundleDir', dir === undefined ? '当前入口未找到 bundle' : '已找到 bundle', { packageName, anchor, dir })
     if (dir !== undefined) return dir
   }
   throw new Error(
@@ -645,7 +665,7 @@ export function resolveBundleDir(
  * the shared Harness home. This is used by application-owned profiles whose
  * package project and lifecycle belong to that application.
  * Unreadable bundles, and bundles whose own dsh peers the profile does not exempt, are skipped
- * without changing the manifest and listed in `skippedBundles`; nothing is printed.
+ * without changing the manifest and listed in `skippedBundles`; source-reading diagnostics go to stderr.
  * @param binName - the diagnostic prefix on thrown errors.
  * @param dir - absolute profile package directory.
  * @param installAnchor - absolute path of the owning dsh app's package.json.
@@ -658,8 +678,10 @@ export function loadProfileDirectory(
   installAnchor: string,
   options: { userLayer?: boolean } = {},
 ): Profile {
+  profileDebug('loadProfileDirectory', '读取 Profile 目录', { dir, installAnchor, options })
   const manifest = readProfileManifest(binName, dir)
   const bundles = manifest.dsh?.profile?.bundles ?? []
+  profileDebug('loadProfileDirectory', '按 manifest 顺序加载 bundle', { bundles })
   const layers: ProfileLayer[] = []
   const skippedBundles: SkippedBundle[] = []
   const exemptions = bundles.length === 0 ? {} : readProfileVersionExemptions(dir)
@@ -673,11 +695,14 @@ export function loadProfileDirectory(
       }
       // A bundle is not a plugin row, so row admission never reads its own peers.
       const issue = evaluatePluginCompatibility(bundleManifest, exemptions)
+      profileDebug('loadProfileDirectory', 'bundle 版本兼容性检查', { packageName, issue, exemptions })
       if (issue !== undefined && !issue.exempted) throw new Error(pluginCompatibilityWarning(issue))
       const patchPaths = bundlePatchPaths(packageDir, bundle)
+      profileDebug('loadProfileDirectory', '读取 bundle 声明的 patch 文件', { packageName, packageDir, bundle, patchPaths })
       const patches = patchPaths.flatMap(patchPath => loadOverlayPatches(binName, patchPath))
       layers.push({ packageName, packageDir, patchPaths, patches })
     } catch (error) {
+      profileDebug('loadProfileDirectory', 'bundle 加载失败：记录跳过原因，继续后续 bundle', { packageName, error })
       skippedBundles.push({ packageName, reason: String(error) })
     }
   }
@@ -685,6 +710,9 @@ export function loadProfileDirectory(
   const patches = options.userLayer !== false && existsSync(patchPath)
     ? loadOverlayPatches(binName, patchPath)
     : []
+  profileDebug('loadProfileDirectory', 'Profile 读取完成：bundle 层与用户层仍未合成', {
+    dir, loadedBundles: layers.map(layer => layer.packageName), skippedBundles, patchPath, userLayer: options.userLayer !== false, patches,
+  })
   return { name: basename(dir), dir, layers, patchPath, patches, skippedBundles }
 }
 
@@ -705,6 +733,7 @@ export function loadProfile(
   binName: string, name: string, installAnchor: string, home: string = resolveDshHome(),
   options: { userLayer?: boolean } = {},
 ): Profile {
+  profileDebug('loadProfile', '按名称加载 Profile', { name, home, installAnchor, options })
   const dir = resolveProfileDir(name, home)
   if (!existsSync(join(dir, 'package.json'))) {
     const template = PROFILE_TEMPLATES[name]
@@ -713,8 +742,10 @@ export function loadProfile(
         `${binName}: profile ${JSON.stringify(name)} does not exist; create it with 'dsh plugin --profile ${name} add <package>'`,
       )
     }
+    profileDebug('loadProfile', 'manifest 缺失，使用内置模板初始化', { name, dir, template })
     initProfile(dir, template.bundles)
   }
+  profileDebug('loadProfile', '准备目录：清理旧版包投影，核对内置模板，读取配置', { dir })
   removeLinkProjections(dir)
   normalizeShippedProfile(name, dir, readProfileManifest(binName, dir))
   return loadProfileDirectory(binName, dir, installAnchor, options)
@@ -731,8 +762,11 @@ export function loadProfile(
 export function composeEntries(
   layers: readonly PatchOptions[][], warn: (message: string) => void = () => {},
 ): EntryOptions[] {
-  return applyEntryPatches([], structuredClone(layers.flat()), (message: string, ...args: unknown[]) => {
+  profileDebug('composeEntries', '在空插件列表上应用有序 patch 层', { layers })
+  const entries = applyEntryPatches([], structuredClone(layers.flat()), (message: string, ...args: unknown[]) => {
     let index = 0
     warn(message.replace(/%C/g, () => JSON.stringify(args[index++])))
   })
+  profileDebug('composeEntries', '合成后的插件条目；此时尚未激活', entries)
+  return entries
 }

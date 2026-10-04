@@ -1,5 +1,6 @@
 /** Launcher-owned profile locations and composition inputs. */
 import { join } from 'node:path'
+import { profileDebug } from './profile-debug.ts'
 import { composeEntries, loadProfileDirectory, PROFILE_PATCH_FILENAME, type Profile } from './profile.ts'
 import { loadOptionalPatches } from './index.ts'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
@@ -61,15 +62,30 @@ export function resolveTelemetryPatch(disabledEnv: string | undefined, hasRow: b
  * @returns Detached ordered patches; this function does not update the Loader.
  */
 export function readProfilePatches(binName: string, context: ProfileContext, initialProfile?: Profile): PatchOptions[] {
+  profileDebug('readProfilePatches', '组装有序配置层', { context, reuseInitialProfile: initialProfile !== undefined })
   const profile = initialProfile ?? loadProfileDirectory(binName, context.dir, context.installAnchor, { userLayer: false })
+  const userPatches = initialProfile?.patches ?? loadOptionalPatches(binName, context.patchPath) ?? []
+  const homePath = join(context.home, PROFILE_PATCH_FILENAME)
+  const homePatches = loadOptionalPatches(binName, homePath) ?? []
+  profileDebug('readProfilePatches', '应用顺序：bundle → Profile 用户层 → home 用户层 → 命令行覆盖层', {
+    layers: [
+      ...profile.layers.map(layer => ({ source: layer.packageName, paths: layer.patchPaths, patches: layer.patches })),
+      { source: 'Profile 用户层', path: context.patchPath, patches: userPatches },
+      { source: 'home 用户层', path: homePath, patches: homePatches },
+      { source: '命令行覆盖层', patches: context.overlays },
+    ],
+  })
   const patches = structuredClone([
     ...profile.layers.flatMap(layer => layer.patches),
-    ...(initialProfile?.patches ?? loadOptionalPatches(binName, context.patchPath) ?? []),
-    ...(loadOptionalPatches(binName, join(context.home, PROFILE_PATCH_FILENAME)) ?? []),
+    ...userPatches,
+    ...homePatches,
     ...context.overlays,
   ])
   const telemetryPatch = resolveTelemetryPatch(context.telemetryDisabledEnv,
     composeEntries([patches]).some(row => row.id === TELEMETRY_ROW_ID))
+  profileDebug('readProfilePatches', '最后应用遥测开关；非空环境值且条目存在才追加禁用 patch', {
+    disabledEnv: context.telemetryDisabledEnv, telemetryPatch,
+  })
   if (telemetryPatch !== undefined) patches.push(telemetryPatch)
   return patches
 }
